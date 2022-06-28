@@ -1,0 +1,8 @@
+.vscode/
+.ipynb_checkpoints/
+__pycache__/
+tests/
+data/
+generative_models/
+AISjobs/
+cscs*
