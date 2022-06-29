@@ -23,7 +23,7 @@ SHAPE = {
     'omniglot': torch.tensor((1, 105, 105)),
     'cifar10': torch.tensor((3, 32, 32)),
     'celeba': torch.tensor((3, 64, 64)),
-    'None': torch.tensor([])
+    None: torch.tensor([])
 }
 
 VALRATIO = {
@@ -53,12 +53,13 @@ class NoneDataset(Dataset):
     def __getitem__(self, item):
         return torch.tensor([]), torch.tensor([])
         
-def make_dataloaders(dataset, batch_sizes, ais_split=True, seed=1, binarize=False, dequantize=False, with_label=False, **kwargs):
+def make_dataloaders(dataset, batch_sizes, ais_split=True, seed=1, binarize=False, dequantize=False, with_label=False):
     # splits keeping tuples of (data, label) for train, val, test, 
     # aistrain and aisval partitions
     # datasets_ holding the corresponding datasets
     # data_loaders holds the loaders
     data_dir = './data'
+    kwargs = {'num_workers': 20, 'pin_memory': True}
     splits = []
     data_loaders = []
     normalized = None
@@ -169,6 +170,7 @@ def make_dataloaders(dataset, batch_sizes, ais_split=True, seed=1, binarize=Fals
         length.append(f'{len(dataset_)}{shuffle[i]}')
         data_loaders.append(DataLoader(dataset_, batch_size=batch_sizes[i], shuffle=shuffle[i], **kwargs))
 
-    print('loaded {} with splits {}'.format(dataset, ','.join(length)))
+    if dataset is not None:
+        print('=> Loaded dataset {} with splits {}'.format(dataset, ','.join(length)))
     return data_loaders, normalized
     
