@@ -152,15 +152,27 @@ class ARGS:
         self.__dict__.update(kwargs)
         
 class Default_ARGS():
-    sampler='Vanilla'
-    seed=1
-    batch_sizes = [32, 32]
-    device=1
+    sampler='Vanilla'    
+    testname="tests/ecml2022"
     
+    ## Target distribution
+    target='U1'
+    latent_dim=50
+    dataset=None
+    context_dim=0
+    
+    ## Sampling parameters
+    M=5
+    test_n_samples=1024
+    schedule='geometric'
+    path='geometric'
+    
+    ## Proposal distribution
     proposal="normal"
     proposal_hidden_dim=4
     proposal_blocks=1
     
+    ## Transitions
     transition='RWMH'
     transition_hidden_dim=4
     transition_step_sizes=[0.05, 0.15, 0.5]
@@ -170,30 +182,24 @@ class Default_ARGS():
     hmc_alpha = 1.
     hmc_n_leapfrogs = 1
     
-    M=5
+    ## Training parameters
+    seed=1
     n_samples=256
-    test_n_samples=1024
-    schedule='geometric'
-    path='geometric'
-
+    batch_sizes = [32, 32]
     loss='inverseKL'
     reinforce_loss=False
     variance_reduction=False
+    device=1
     epochs=100
     learning_rate=3e-2
-
+    train_anyway=False
+    
+    ## Parameteric annealing   
     bridge_hidden_dim=4
     bridge_depth=0
     bridge_dropout=0.2
     bridge_q=True
-    bridge_pi=True
-    
-    testname="tests/ecml2022"
-    target='U1'
-    latent_dim=50
-    dataset=None
-    context_dim=0
-    train_anyway=False
+    bridge_pi=True        
         
 
 def get_transition_default_kwargs(transition, kwargs):
@@ -278,49 +284,36 @@ def get_benchmark_experiments(args, **kwargs):
 def get_all_parsed_args():
     parser = ArgumentParser()
     args = Default_ARGS
+    ## Sampler
+    parser.add_argument("--sampler", default=args.sampler)
+
     ## Logging
     parser.add_argument("--testname", default=args.testname)
 
-    ## Sampler
-    parser.add_argument("--sampler", default=args.sampler)
-    
-    ## Training parameters
-    parser.add_argument("--seed", default=args.seed, type=int)
-    parser.add_argument("--batch_sizes", default=args.batch_sizes, nargs='+', type=int)
-    parser.add_argument("--loss", default=args.loss)
-    parser.add_argument("--reinforce_loss", action='store_true')
-    parser.add_argument("--variance_reduction", action='store_true')
-    parser.add_argument("--device", default=args.device, type=int) 
-    parser.add_argument("--epochs", default=args.epochs, type=int)
-    parser.add_argument("--learning_rate", default=args.learning_rate, type=float)
-    parser.add_argument("--n_samples", default=args.n_samples, type=int)
-    parser.add_argument("--test_n_samples", default=args.test_n_samples, type=int)
-    parser.add_argument("--train_anyway", action='store_true')
-
-    ## Model
-    parser.add_argument("--model", default=args.model)
-    parser.add_argument("--model_testname", default=args.model_testname)
-    parser.add_argument("--model_model", default=args.model_model)    
-    parser.add_argument("--model_net", default=args.model_net)
-    parser.add_argument("--model_learning_rate", default=args.model_learning_rate, nargs='+', type=float)
-    parser.add_argument("--model_n_samples", default=args.model_n_samples, type=int)
-    parser.add_argument("--model_epochs", default=args.model_epochs, type=int)
-    parser.add_argument("--model_likelihood", default=args.model_likelihood)
-    parser.add_argument("--model_train", action="store_true")
-    parser.add_argument("--latent_dim", default=args.latent_dim, type=int)
+    ## Target distribution
+    parser.add_argument("--target", default=[args.target], nargs='+')
+    parser.add_argument("--latent_dim", default=args.latent_dim, type=int)    
+    parser.add_argument("--context_dim", default=args.context_dim, type=int)
 
     ## Dataset params
-    parser.add_argument("--dataset", default=args.dataset, choices=['None', 'mnist', 'fashionmnist', 'cifar10', 'omniglot', 'celeba'])
+    parser.add_argument("--dataset", default=args.dataset, choices=[None, 'mnist', 'fashionmnist', 'cifar10', 'omniglot', 'celeba'])
     parser.add_argument("--binarize", action='store_true')
     parser.add_argument("--dequantize", action='store_true')
     
+    ## Sampling parameters
+    parser.add_argument("--M", default=[args.M], type=int, nargs='+')
+    parser.add_argument("--schedule", default=args.schedule)
+    parser.add_argument("--path", default=args.path)
+    parser.add_argument("--test_n_samples", default=args.test_n_samples, type=int)
+    
+    ## Proposal distribution
     ## Proposal distiribution
     parser.add_argument("--proposal", default=args.proposal, choices=["posterior", "normal", "RNVP", "SplineNF"])
     parser.add_argument("--proposal_hidden_dim", type=int, default=args.proposal_hidden_dim)
     parser.add_argument("--proposal_blocks", type=int, default=args.proposal_blocks)
     
     ## Transitions
-    parser.add_argument("--transition", default=args.transition)
+    parser.add_argument("--transition", default=[args.transition], nargs='+')
     parser.add_argument("--transition_update", default=args.transition_update)
     parser.add_argument("--transition_n_tune_runs", default=args.transition_n_tune_runs, type=int)
     parser.add_argument("--transition_hidden_dim", type=int, default=args.transition_hidden_dim)
@@ -328,34 +321,25 @@ def get_all_parsed_args():
     parser.add_argument("--hmc_partial_refresh", type=int, default=args.hmc_partial_refresh)
     parser.add_argument("--hmc_alpha", type=float, default=args.hmc_alpha)
     parser.add_argument("--hmc_n_leapfrogs", type=int, default=args.hmc_n_leapfrogs)
-    parser.add_argument("--metflow_hidden_dim", type=int, default=args.metflow_hidden_dim)
-
-    ## Annealing
-    parser.add_argument("--M", default=args.M, type=int)
-    parser.add_argument("--schedule", default=args.schedule)
-    parser.add_argument("--path", default=args.path)
-    parser.add_argument("--u_hidden_dim", type=int, default=args.u_hidden_dim)
-    parser.add_argument("--u_deep", action="store_true")
-    parser.add_argument("--u_custom", action="store_true")
-    parser.add_argument("--u_onehot_beta", action="store_true")
-    parser.add_argument("--u_ordinal_beta", action="store_true")
-    parser.add_argument("--u_fix_endpoints", default=args.u_fix_endpoints, choices=["geometric1", "geometric2", "linear"])
-    parser.add_argument("--u_regularize_endpoints", action="store_true")
-    parser.add_argument("--u_with_target_density", action="store_true")
-    parser.add_argument("--u_with_proposal_density", action="store_true")    
-    parser.add_argument("--context_dim", default=args.context_dim, type=int)
+    
+    ## Training parameters
+    parser.add_argument("--seed", default=[args.seed], type=int, nargs='+')
+    parser.add_argument("--n_samples", default=args.n_samples, type=int)
+    parser.add_argument("--batch_sizes", default=args.batch_sizes, nargs='+', type=int)
+    parser.add_argument("--loss", default=[args.loss], nargs='+')
+    parser.add_argument("--reinforce_loss", action='store_true')
+    parser.add_argument("--variance_reduction", action='store_true')
+    parser.add_argument("--device", default=args.device, type=int) 
+    parser.add_argument("--epochs", default=args.epochs, type=int)
+    parser.add_argument("--learning_rate", default=args.learning_rate, type=float)
+    parser.add_argument("--train_anyway", action='store_true')
+    
+    ## Parameteric annealing   
+    parser.add_argument("--bridge_hidden_dim", type=int, default=args.bridge_hidden_dim)
+    parser.add_argument("--bridge_q", action="store_true")
+    parser.add_argument("--bridge_pi", action="store_true")
+    parser.add_argument("--bridge_depth", type=int, default=args.bridge_depth)
+    parser.add_argument("--bridge_dropout", type=float, default=args.bridge_dropout)
     
     args = parser.parse_args()
-    kwargs = args.__dict__
-    for k in model_args.__dict__.keys():
-        if f'model_{k}' in kwargs.keys():
-            setattr(model_args, k, kwargs[f'model_{k}'])
-        elif k in kwargs.keys():
-            setattr(model_args, k, kwargs[k])
-
-    if model_args.model in ['VAE', 'IWAE']:
-        model_args.learning_rate = [model_args.learning_rate[0]]
-    elif model_args.model in ['GAN', 'BiGAN', 'AAE', 'WGANGP'] and len(model_args.learning_rate) < 2:
-        model_args.learning_rate = [model_args.learning_rate[0]] * 2
-        
-    return args, model_args    
+    return args    

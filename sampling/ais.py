@@ -227,7 +227,7 @@ class ParamAIS(AIS):
         self.best_epoch = 0.
         self.best_loss = torch.tensor([np.inf]).to(self.device)
 
-        print(bridge_kwargs)
+        #print(bridge_kwargs)
         self.get_bridge(**bridge_kwargs)
         self.get_encoder(context_net)
 
