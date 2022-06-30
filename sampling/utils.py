@@ -6,9 +6,153 @@ import matplotlib.pyplot as plt
 from scipy.special import logsumexp
 
 from utils.aux import secondsToStr
-from sampling.ais import Vanilla, MCMC
+from sampling.ais import Vanilla, MCMC, ParamAIS
 from utils.plots import plot, plot_particles, plot_energy_heatmap
 from utils.experiments import get_save_dir
+from utils.checkpoints import save_sampler_ckpt, load_sampler_ckpt
+
+def train_sampler(args, sampler, optimizer, epochs, log_density, n_samples, loaders, experiment, losses, results_dir, ckpt_dir, plot_dir, device):
+    start = time.time()
+    secondsToStr(start)    
+    if len(losses.keys()) == 0:
+        losses['train'] = []
+        losses['train_all'] = {}
+        losses['val'] = []
+        losses['val_all'] = {}
+        losses['skip_counter'] = 0
+        losses['nan_counter'] = 0
+        losses['early_stop'] = False
+        losses['skip_break'] = False
+
+    best_ckpt = os.path.join(ckpt_dir, 'best.ckpt')
+    last_ckpt = os.path.join(ckpt_dir, 'last.ckpt')
+    min_epoch = sampler.best_epoch
+    min_loss = sampler.best_loss
+    epoch = sampler.current_epoch
+    #writer = SummaryWriter(log_dir=results_dir)
+
+    start = time.time()
+    if epoch < epochs:
+        while True:
+            sampler.train()
+            torch.set_grad_enabled(True)
+            train_loss_ = 0.
+            #train_transitions_ = []
+            N = 0
+            grads = {}
+            for batch_idx, batch in enumerate(loaders[3]):
+                x, _  = batch
+                x = x.to(device)
+                optimizer.zero_grad()
+                z, log_w, reinforce_log_prob, transition_logs = sampler(n_samples, x=x, update_step_size=True)
+                #loggamma = torch.cumsum(loggamma * torch.ones(logdets.shape[1]).to(device), dim=-1)
+                #gamma = torch.flip(torch.exp((loggamma - loggamma[0])), dims=[0]).reshape(1, -1)
+                #gamma = torch.cat([torch.Tensor([1]), torch.zeros(args.M - 2), torch.Tensor([1])], dim=0).reshape(1, -1).to(device)
+                loss = sampler.loss_function(z, x, log_w, reinforce_log_prob, n_samples).mean()
+                #loss = ((omegas - 1./z.shape[0]) * (logqts[1][:,1:] + logdets - logqts[1][:,0].reshape(-1,1)))
+                #loss = omegas * (logqts[1][:,1:] + logdets - logqts[1][:,0].reshape(-1,1)) - 1./z.shape[0] * logws
+                train_loss_ += loss * x.shape[0]
+                N += x.shape[0]
+                #train_transitions_.append(transition_logs)
+                loss.backward()
+                skip = False
+
+                for i, p in enumerate(sampler.parameters()):
+                    #skip bad sample batches if the gradient of objective is NaN 
+                    #this happens less often when we have BN in RealNVP blocks
+                    if p.grad is not None and torch.isnan(p.grad).float().sum() > 0:
+                        skip = True
+                        break
+
+                #for i, p in enumerate(sampler.parameters()):
+                #    if p.grad is not None:
+                #        if i in grads.keys():
+                #            grads[i].append(p.grad.detach().reshape(p.grad.shape + (1,)))
+                #        else:
+                #            grads[i] = [p.grad.detach().reshape(p.grad.shape + (1,))]                
+
+                if not skip:
+                    torch.nn.utils.clip_grad_norm_(sampler.parameters(), 1.)
+                    optimizer.step()
+                    losses['skip_counter'] = 0
+                elif losses['skip_counter'] < 10:
+                    print('nan', loss.item(), min_loss.item())
+                    losses['skip_counter'] += 1
+                    losses['nan_counter'] += 1
+                else:
+                    losses['skip_break'] = True
+                    print('skipbreak')
+                    break
+
+            if losses['skip_break']:
+                break
+
+            train_loss_ /= N
+            losses['train'].append(train_loss_.item())
+
+            #for i in grads.keys():
+            #    grads[i] = torch.cat(grads[i], dim=-1)
+            #    mean = grads[i].mean(dim=-1)
+            #    std = torch.sqrt(((grads[i] - mean.reshape(mean.shape + (1,)))**2).mean(dim=-1))
+            #    writer.add_scalar(f'mean norm_{i}', torch.norm(mean, 2), epoch)
+            #    writer.add_scalar(f'std norm_{i}', torch.norm(std, 2), epoch)
+            #    writer.add_scalar(f'mean snr_{i}', torch.mean(mean / std), epoch)
+            #    writer.add_scalar(f'grad_norm_{i}', torch.norm(mean, 2)/torch.norm(p.data.detach(), 2), epoch)
+
+            sampler.eval()
+            with torch.no_grad():
+                val_loss_ = 0.
+                #val_transitions_ = []
+                N = 0
+                for batch_idx, batch in enumerate(loaders[4]):
+                    x, _ = batch
+                    x = x.to(device)
+                    z, log_w, reinforce_log_prob, transition_logs = sampler(n_samples, x=x, update_step_size=False)
+                    loss = sampler.loss_function(z, x, log_w, reinforce_log_prob, n_samples).mean()
+                    val_loss_ += loss * x.shape[0]
+                    N += x.shape[0]
+                    #val_transitions_.append(transition_logs)
+                val_loss_ /= N
+                losses['val'].append(val_loss_.item())
+                if val_loss_ < min_loss:
+                    min_loss = val_loss_
+                    min_epoch = epoch
+                    save_sampler_ckpt(best_ckpt, [optimizer], True, sampler)
+                    #torch.save(sampler.state_dict(), best_ckpt)
+                    if epoch - min_epoch >= 250:
+                        losses['early_stop'] = True
+                        break
+            if epoch % int(epochs / 10) == 0:
+                end = time.time()
+                print(epoch, train_loss_.item(), val_loss_.item(), min_epoch, min_loss.item(), secondsToStr(end - start))
+                start = end
+                save_sampler_ckpt(last_ckpt, [optimizer], True, sampler)
+                with open(os.path.join(results_dir, 'losses.pkl'), 'wb+') as f:
+                    pickle.dump(losses, f)
+                sampler.best_epoch = min_epoch
+                sampler.best_loss = min_loss
+
+            if sampler.current_epoch in [10, 20, 50, 100]:
+                #eval_sampler(sampler, log_density, loaders[2], None, args.latent_dim, experiment, losses, results_dir, 
+                #             plot_dir, f'{sampler.current_epoch}', device, n_samples=n_samples)
+                epoch_ckpt = os.path.join(ckpt_dir, f'{sampler.current_epoch}.ckpt')
+                save_sampler_ckpt(epoch_ckpt, [optimizer], True, sampler)
+                #start = end
+            #scheduler.step()
+            epoch += 1
+            sampler.current_epoch += 1
+            if epoch == epochs:
+                break
+
+        #torch.save(sampler.state_dict(), last_ckpt)
+        save_sampler_ckpt(last_ckpt, [optimizer], True, sampler)
+        with open(os.path.join(results_dir, 'losses.pkl'), 'wb+') as f:
+            pickle.dump(losses, f)
+        sampler.best_epoch = min_epoch
+        sampler.best_loss = min_loss
+        sampler, optimizer = load_sampler_ckpt(best_ckpt, [optimizer], False, sampler)
+        #writer.close()
+    return sampler, losses
 
 def tune_vanilla_sampler(sampler, log_density, data_loader, experiment, losses, ckpt_dir, n_samples=4096):
     sampler.eval()
@@ -143,11 +287,13 @@ def eval_sampler(sampler, target_log_density, data_loader, experiment, losses, r
 def get_sampler(args, experiment, target_log_density):
     input_dim = target_log_density.data_dim
     if experiment['sampler'] in ['Vanilla']:
-        sampler = Vanilla(input_dim, args.context_dim, target_log_density, args.M, 
-                      device=args.device, **experiment)
+        sampler = Vanilla(input_dim, args.context_dim, target_log_density, args.M,  device=args.device, 
+                          **experiment)
     elif experiment['sampler'] in ['MCMC']:
-        sampler = MCMC(input_dim, args.context_dim, target_log_density, args.M, 
-                      device=args.device, **experiment)
+        sampler = MCMC(input_dim, args.context_dim, target_log_density, args.M,  device=args.device, **experiment)
+    elif experiment['sampler'] == 'ParamAIS':
+        sampler = ParamAIS(input_dim, args.context_dim, target_log_density, args.M, device=args.device, 
+                           **experiment)
     else:
         raise NotImplemented
     return sampler

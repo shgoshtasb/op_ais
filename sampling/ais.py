@@ -4,24 +4,22 @@ import torchvision
 import numpy as np
 
 from sampling.annealing import get_schedule, get_proposal, get_transition, get_annealing_path
+from sampling.twist import Bridge
 from utils.aux import repeat_data
 
     
 class AIS(torch.nn.Module):
-    def __init__(self, input_dim, context_dim, target_log_density, M, 
-                 schedule='geometric', path='geometric',
-                 proposal='normal', proposal_kwargs={}, transition='Neal', 
-                 transition_kwargs={}, 
-                 device=1, logger=None, dataset='None', name='AIS', **kwargs):
+    def __init__(self, input_dim, context_dim, target_log_density, M, schedule='geometric', path='geometric',
+                 proposal='normal', proposal_kwargs={}, transition='Neal', transition_kwargs={}, 
+                 device=1, logger=None, name='AIS', **kwargs):
         super().__init__()
         self.name = name
-        self.dataset = dataset
         self.device = 'cuda' if device > 0 else 'cpu'
         self.n_device = device#2 if device == 'cuda' else 0
         self.logger_ = logger
         # Module dimentions
         self.input_dim = input_dim
-        self.context_dim = None if context_dim == 0 else context_dim
+        self.context_dim = context_dim
         # Proposal and target [unnormalized] log_densities and 
         # proposal sample generator
         self.M = M
@@ -32,10 +30,9 @@ class AIS(torch.nn.Module):
         self.set_observation(None)
         self.set_proposal(proposal, **proposal_kwargs)
         self.set_transition(transition, **transition_kwargs)
-        # for checkpoint storig
+        
+        # for checkpoint storing
         self.current_epoch = 0
-        self.best_epoch = 0.
-        self.best_loss = torch.tensor([np.inf]).to(self.device)
         
     @property
     def annealing_path(self):
@@ -193,7 +190,7 @@ class AIS(torch.nn.Module):
         log_w = log_w.view(n_samples, -1)
         obj = -log_w        
         loss = obj.mean(dim=0, keepdim=True).mean()
-        return loss
+        return loss, obj
     
     def jefferys(self, z, log_w, n_samples=1):
         log_w = log_w.view(n_samples, -1)
@@ -202,24 +199,91 @@ class AIS(torch.nn.Module):
         obj = (n_samples * normalized_w - 1.) * log_w 
         # should I detach normalized_w?
         loss = obj.mean(dim=0, keepdim=True).mean()
-        return loss
+        return loss, obj
+        
         
 class Vanilla(AIS):
-    def __init__(self, input_dim, context_dim, target_log_density, M, 
-                 schedule='geometric', path='geometric', 
-                 proposal='normal', proposal_kwargs={}, transition='Neal', 
-                 transition_kwargs={}, 
-                 device=1, logger=None, dataset='None', name='AIS', **kwargs):
-        super().__init__(input_dim, context_dim, target_log_density, M, 
-                 schedule, path, proposal, proposal_kwargs, transition, 
-                 transition_kwargs, 
-                 device, logger, dataset, name)
+    def __init__(self, input_dim, context_dim, target_log_density, M, schedule='geometric', path='geometric', 
+                 proposal='normal', proposal_kwargs={}, transition='Neal', transition_kwargs={}, 
+                 device=1, logger=None, name='AIS', **kwargs):
+        super().__init__(input_dim, context_dim, target_log_density, M, schedule, path, proposal, proposal_kwargs, 
+                         transition, transition_kwargs, device, logger, name)
         for p in self.parameters():
             p.requires_grad_(False)
 
+class ParamAIS(AIS):
+    def __init__(self, input_dim, context_dim, target_log_density, M, bridge_kwargs={}, context_net='Id', 
+                 loss='inverseKL', proposal='normal', proposal_kwargs={}, transition='RWMH', transition_kwargs={}, 
+                 reinforce_loss=False, variance_reduction=False, device=1, logger=None, name='ParamAIS', **kwargs):
+        super().__init__(input_dim, context_dim, target_log_density, M, 'linear', 'parameteric', proposal, 
+                         proposal_kwargs, transition, transition_kwargs, device, logger, name)
+
+        
+        # loss 
+        self.loss = loss
+        self.reinforce_loss = reinforce_loss
+        self.variance_reduction = variance_reduction
+        # for checkpoint storing
+        self.best_epoch = 0.
+        self.best_loss = torch.tensor([np.inf]).to(self.device)
+
+        print(bridge_kwargs)
+        self.get_bridge(**bridge_kwargs)
+        self.get_encoder(context_net)
+
+    def get_encoder(self, context_net):
+        if context_net == 'Id':
+            self.encoder_net = lambda x: x
+        else:
+            if self.n_device > 0:
+                self.encoder_net.cuda()
+            if self.n_device > 1:
+                self.encoder_net = nn.DataParallel(self.encoder_net, range(self.n_device))
+
+    def get_context(self, x):
+        if self.context_dim is None:
+            return x
+        else:
+            return self.encoder_net(x)
+        
+            
+    def get_bridge(self, q=True, pi=True, **kwargs):
+        self.bridge_q = q
+        self.bridge_pi = pi
+        self.bridge = Bridge(self.input_dim, self.context_dim, self.bridge_q, self.bridge_pi, **kwargs)
+                        
+    @property
+    def annealing_path(self):
+        return lambda beta: lambda z, x_embedding: self.log_gamma(z, x_embedding, beta)
+            
+    def log_gamma(self, z, x_embedding, beta):
+        z = z.to(torch.float32)
+        pi_z = self.current_target_log_density(z, x_embedding).to(torch.float32)
+        q_z = self.current_proposal_log_density(z, x_embedding).to(torch.float32)
+        u = self.bridge(z, x_embedding, beta, q_z if self.bridge_q else None, pi_z if self.bridge_pi else None)
+        return u + (1. - beta) * q_z + beta * pi_z
+
+    def loss_function(self, z, x, log_w, reinforce_log_prob, n_samples=1):
+        batch_size = z.shape[0] // n_samples
+        reinforce_log_prob = reinforce_log_prob.view(n_samples, -1)
+        if self.loss == 'inverseKL':
+            loss, obj = self.inverseKL(z, log_w, n_samples)
+        elif self.loss == 'jefferys':
+            loss, obj = self.jefferys(z, log_w, n_samples)
+        else:
+            raise NotImplemented
+            
+        if self.reinforce_loss:
+            if self.variance_reduction and n_samples > 1:
+                debiased = (n_samples * obj - obj.sum(0, keepdim=True)) / (n_samples - 1.)
+            else:
+                debiased = obj
+            reinforce = (reinforce_log_prob * debiased.detach()).mean(dim=0,keepdim=True).mean()
+            loss = loss + reinforce - reinforce.detach()
+        return loss
+    
             
 class MCMC(Vanilla):
-        
     @property
     def annealing_path(self):
         return lambda t: self.target_log_density 
