@@ -22,3 +22,13 @@ def binary_crossentropy_stable(s, y):
     x = torch.log(s + 1e-7) - torch.log(1 - s + 1e-7)
     return binary_crossentropy_logits_stable(x, y)
 
+def get_activations():
+    return {
+        "relu": torch.nn.ReLU,
+        "leakyrelu": torch.nn.LeakyReLU,
+        "tanh": torch.nn.Tanh,
+        "logsoftmax": lambda: torch.nn.LogSoftmax(dim=-1),
+        "logsigmoid": torch.nn.LogSigmoid,
+        "softplus": torch.nn.Softplus,
+        "gelu": torch.nn.GELU
+    }

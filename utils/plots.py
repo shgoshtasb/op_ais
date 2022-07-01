@@ -1,4 +1,5 @@
 import torch
+import torchvision
 import matplotlib.pyplot as plt
 import matplotlib.cm as cm
 from scipy.special import logsumexp
@@ -101,3 +102,6 @@ def plot_energy_heatmap(ax, log_density, x, lims=LIMS, nb_point_per_dimension=10
     ax.set_xlim(lims[0][0], lims[0][1])
     ax.set_ylim(lims[1][0], lims[1][1])
 
+def plot_images(ax, x_gen):
+    grid = torchvision.utils.make_grid(x_gen).detach().cpu()
+    ax.imshow(grid.permute(1, 2, 0))

@@ -8,7 +8,7 @@ from scipy.special import logsumexp
 from utils.aux import secondsToStr
 from sampling.ais import Vanilla, MCMC, ParamAIS
 from utils.plots import plot, plot_particles, plot_energy_heatmap
-from utils.experiments import get_save_dir
+from utils.experiments import get_dirs
 from utils.checkpoints import save_sampler_ckpt, load_sampler_ckpt
 
 def train_sampler(args, sampler, optimizer, epochs, log_density, n_samples, loaders, experiment, losses, results_dir, ckpt_dir, plot_dir, device):
@@ -302,7 +302,7 @@ def init_sampler(args, experiment, target_log_density, n_samples=16, make_dirs=F
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    save_dir, ckpt_dir, plot_dir, results_dir = get_save_dir(args, experiment, make=make_dirs)
+    save_dir, ckpt_dir, plot_dir, results_dir = get_dirs(args, experiment, make=make_dirs)
     #print(experiment)
             
     with open(os.path.join(save_dir, 'experiment.pkl'), 'wb+') as f:
