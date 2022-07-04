@@ -10,6 +10,7 @@ from sampling.ais import Vanilla, MCMC, ParamAIS
 from utils.plots import plot, plot_particles, plot_energy_heatmap
 from utils.experiments import get_dirs
 from utils.checkpoints import save_sampler_ckpt, load_sampler_ckpt
+from utils.targets import SyntheticTarget
 
 def train_sampler(args, sampler, optimizer, epochs, log_density, n_samples, loaders, experiment, losses, results_dir, ckpt_dir, plot_dir, device):
     start = time.time()
@@ -178,7 +179,7 @@ def tune_vanilla_sampler(sampler, log_density, data_loader, experiment, losses, 
 def eval_sampler(sampler, target_log_density, data_loader, experiment, losses, results_dir, 
                  plot_dir, prefix, device, n_samples=4096, just_log=True, log=False):
     sampler.eval()
-    print("=> Evaluating...")
+    print("=> Evaluating {}...".format(prefix))
     with torch.no_grad():
         log_ws = []
         transitions = []
@@ -201,7 +202,9 @@ def eval_sampler(sampler, target_log_density, data_loader, experiment, losses, r
             zs.append(z)
             log_ws.append(log_w)
             log_accept_ratios.append(transition_logs['log_accept_ratio'])
-
+            if batch_idx > 3:
+                break
+            
         zs = torch.cat(zs, dim=0)
         log_ws = torch.cat(log_ws, dim=0)
         log_accept_ratios = torch.cat(log_accept_ratios, dim=0)
@@ -216,8 +219,8 @@ def eval_sampler(sampler, target_log_density, data_loader, experiment, losses, r
     log_w = log_ws.view(n_samples, -1).cpu().numpy()
     w = np.exp(log_w)
     n_x = log_w.shape[1]
-    exp_logZ = torch.exp(target_log_density.logZ) if target_log_density.logZ is not None else None
-    logZs = None if target_log_density.logZ is None else "{:.3f}".format(target_log_density.logZ.cpu().numpy())
+    exp_logZ = torch.exp(target_log_density.logZ) if type(target_log_density) ==  SyntheticTarget and target_log_density.logZ is not None else None
+    logZs = None if exp_logZ is None else "{:.3f}".format(target_log_density.logZ.cpu().numpy())
     Zs = None if exp_logZ is None else "{:.3f}".format(exp_logZ.cpu().numpy())
     
     if n_x == 1:
@@ -285,7 +288,7 @@ def eval_sampler(sampler, target_log_density, data_loader, experiment, losses, r
                 plt.close()
                 
 def get_sampler(args, experiment, target_log_density):
-    input_dim = target_log_density.data_dim
+    input_dim = args.latent_dim
     if experiment['sampler'] in ['Vanilla']:
         sampler = Vanilla(input_dim, args.context_dim, target_log_density, args.M,  device=args.device, 
                           **experiment)
@@ -363,7 +366,8 @@ def train_and_eval_sampler(args, experiment, target_log_density, loaders, n_samp
     device = 'cuda' if args.device > 0 else 'cpu'
     sampler.to(device)
     if not os.path.isfile(os.path.join(save_dir, 'done')):
-        eval_sampler(sampler, target_log_density, loaders[2], experiment, losses,
+        if args.sampler == 'ParamAIS':
+            eval_sampler(sampler, target_log_density, loaders[2], experiment, losses,
                      results_dir, plot_dir, f'{sampler.current_epoch}', device, n_samples=n_samples, 
                      log=log)
         

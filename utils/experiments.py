@@ -88,6 +88,7 @@ def get_transition_kwargs(args, kwargs):
             kwargs['transition_kwargs'] = {'hidden_dim': args.transition_hidden_dim, 
                                            'step_sizes': args.transition_step_sizes}
             sym = f'{args.transition_hidden_dim}.{args.transition_step_sizes}'            
+        
     kwargs['transition_kwargs']['update'] = args.transition_update
     if 'tune' in args.transition_update:
         kwargs['transition_kwargs']['n_tune_runs'] = args.transition_n_tune_runs
@@ -99,7 +100,9 @@ def get_transition_kwargs(args, kwargs):
 def get_bridge_kwargs(args, kwargs):
     kwargs['bridge_kwargs'] = {'hidden_dim': args.bridge_hidden_dim, 'depth': args.bridge_depth, 
                    'q': args.bridge_q, 'pi': args.bridge_pi, 'dropout': args.bridge_dropout}
-    sym = ('q' if args.bridge_q else '') + ('p' if args.bridge_pi else '') + \
+    kwargs['context_net'] = args.context_net
+    kwargs['data_shape'] = SHAPE[args.dataset]
+    sym = f'{args.context_net[-1]}' + ('q' if args.bridge_q else '') + ('p' if args.bridge_pi else '') + \
                 f'{args.bridge_hidden_dim}x{args.bridge_depth}%{args.bridge_dropout}'
     return kwargs, sym
 
@@ -186,7 +189,7 @@ class Default_ARGS():
     ## Training parameters
     seed=1
     n_samples=256
-    batch_sizes = [32, 32]
+    batch_sizes = [128, 128]
     loss='inverseKL'
     reinforce_loss=False
     variance_reduction=False
@@ -203,7 +206,7 @@ class Default_ARGS():
     bridge_pi=True        
         
 
-def get_transition_default_kwargs(transition, kwargs):
+def get_transition_default_kwargs(sampler, transition, kwargs):
     if transition == 'Neal':
         kwargs['transition_step_sizes'] = [0.05, 0.15, 0.5]
     elif transition == 'RWMH':
@@ -225,6 +228,10 @@ def get_transition_default_kwargs(transition, kwargs):
     elif transition == 'SNF':
         kwargs['transition_hidden_dim'] = 4
         kwargs['transition_step_sizes'] = [0.5]
+    if sampler == 'Vanilla' or sampler == 'MCMC':
+        kwargs['transition_update'] = 'fixed'
+    elif sampler == 'ParamAIS':
+        kwargs['transition_update'] = 'learn'
     return kwargs
     
 default_benchmark_arglist = {
@@ -271,7 +278,7 @@ def get_benchmark_experiments(args, **kwargs):
             experiment_kwargs = args.__dict__.copy()
             for updatekey in config.keys():
                 experiment_kwargs[updatekey] = config[updatekey]
-            experiment_kwargs = get_transition_default_kwargs(experiment_kwargs['transition'], experiment_kwargs)
+            experiment_kwargs = get_transition_default_kwargs(sampler, experiment_kwargs['transition'], experiment_kwargs)
             args_ = ARGS(**experiment_kwargs)
             #experiments.append((args_, get_experiment(args_)))
             

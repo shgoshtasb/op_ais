@@ -6,6 +6,7 @@ import numpy as np
 from sampling.annealing import get_schedule, get_proposal, get_transition, get_annealing_path
 from sampling.twist import Bridge
 from utils.aux import repeat_data
+from models.encoder import WuFCEncoder1, WuFCEncoder2, WuFCEncoder3, BinaryEncoder, ConvEncoder, DCGANEncoder
 
     
 class AIS(torch.nn.Module):
@@ -212,13 +213,12 @@ class Vanilla(AIS):
             p.requires_grad_(False)
 
 class ParamAIS(AIS):
-    def __init__(self, input_dim, context_dim, target_log_density, M, bridge_kwargs={}, context_net='Id', 
+    def __init__(self, input_dim, context_dim, target_log_density, M, data_shape, bridge_kwargs={}, context_net='Id', 
                  loss='inverseKL', proposal='normal', proposal_kwargs={}, transition='RWMH', transition_kwargs={}, 
                  reinforce_loss=False, variance_reduction=False, device=1, logger=None, name='ParamAIS', **kwargs):
         super().__init__(input_dim, context_dim, target_log_density, M, 'linear', 'parameteric', proposal, 
                          proposal_kwargs, transition, transition_kwargs, device, logger, name)
 
-        
         # loss 
         self.loss = loss
         self.reinforce_loss = reinforce_loss
@@ -228,20 +228,37 @@ class ParamAIS(AIS):
         self.best_loss = torch.tensor([np.inf]).to(self.device)
 
         #print(bridge_kwargs)
+        self.data_shape = data_shape
         self.get_bridge(**bridge_kwargs)
         self.get_encoder(context_net)
 
     def get_encoder(self, context_net):
-        if context_net == 'Id':
+        if context_net == 'Id' or self.context_dim == 0:
             self.encoder_net = lambda x: x
         else:
+            if context_net == 'wu-wide':
+                self.encoder_net = WuFCEncoder1(self.data_shape, self.context_dim)
+            elif context_net == 'wu-small':
+                self.encoder_net = WuFCEncoder2(self.data_shape, self.context_dim)
+            elif context_net == 'wu-shallow':
+                self.encoder_net = WuFCEncoder3(self.data_shape, self.context_dim)
+            elif context_net == 'binary':
+                self.encoder_net = BinaryEncoder(self.data_shape, self.context_dim)
+            elif context_net == 'conv':
+                self.encoder_net = ConvEncoder(nn.GELU, self.context_dim, 
+                                                self.data_shape[0], self.data_shape[1])
+            elif context_net == 'dcgan':
+                self.encoder_net = DCGANEncoder(self.data_shape[1], 
+                                                self.data_shape[0], latent_dim= self.context_dim)
+            else:
+                raise NotImplemented
             if self.n_device > 0:
                 self.encoder_net.cuda()
             if self.n_device > 1:
                 self.encoder_net = nn.DataParallel(self.encoder_net, range(self.n_device))
 
     def get_context(self, x):
-        if self.context_dim is None:
+        if self.context_dim == 0:
             return x
         else:
             return self.encoder_net(x)
